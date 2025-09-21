@@ -1,0 +1,48 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.py.class
+
+# Virtual environment
+.env/
+.venv/
+env/
+venv/
+ENV/
+
+# Environment & secrets
+*.env
+.env.local
+.env.*.local
+
+# Logs
+*.log
+logs/
+*.out
+*.err
+
+# IDE settings
+.vscode/
+.idea/
+*.swp
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Byte-compiled / optimized / DLL files
+*.so
+
+# Build / dist
+build/
+dist/
+*.egg-info/
+
+# Docker
+*.pid
+*.seed
+*.bak
+*.tar
+docker-compose.override.yml
