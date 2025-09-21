@@ -1,6 +1,6 @@
 from config import DATABASE_URL, EMBED_MODEL_NAME
 from sentence_transformers import SentenceTransformer
-import psycopg2
+import psycopg
 from typing import List, Dict
 
 # lazy-load model
@@ -21,30 +21,43 @@ def _to_pgvector_literal(emb: List[float]) -> str:
     return "[" + ",".join(map(str, emb)) + "]"
 
 def search_similar(query_text: str, top_k: int = 3) -> List[Dict]:
-    q_emb = embed_text(query_text)
-    q_literal = _to_pgvector_literal(q_emb)
-    conn = psycopg2.connect(DATABASE_URL)
-    cur = conn.cursor()
-    sql = f"""
-      SELECT id, summary, labels, service, incident_type, model, dim, embedding <=> %s AS distance
-      FROM memory_item
-      ORDER BY embedding <=> %s
-      LIMIT %s
-    """
-    cur.execute(sql, (q_literal, q_literal, top_k))
-    rows = cur.fetchall()
-    cur.close()
-    conn.close()
-    results = []
-    for r in rows:
-        results.append({
-            "memory_id": r[0],
-            "summary": r[1],
-            "labels": r[2],
-            "service": r[3],
-            "incident_type": r[4],
-            "model": r[5],
-            "dim": r[6],
-            "distance": float(r[7])
-        })
-    return results
+    if not query_text or not isinstance(query_text, str):
+        print("Invalid query_text for similarity search")
+        return []
+    
+    if not isinstance(top_k, int) or top_k <= 0:
+        top_k = 3
+        
+    try:
+        q_emb = embed_text(query_text)
+        conn = psycopg.connect(DATABASE_URL)
+        cur = conn.cursor()
+        
+        # Use parameterized query to prevent SQL injection
+        sql = """
+          SELECT id, summary, labels, service, incident_type, model, dim, embedding <=> %s AS distance
+          FROM memory_item
+          ORDER BY embedding <=> %s
+          LIMIT %s
+        """
+        cur.execute(sql, (q_emb, q_emb, top_k))
+        rows = cur.fetchall()
+        cur.close()
+        conn.close()
+        
+        results = []
+        for r in rows:
+            results.append({
+                "memory_id": r[0],
+                "summary": r[1],
+                "labels": r[2],
+                "service": r[3],
+                "incident_type": r[4],
+                "model": r[5],
+                "dim": r[6],
+                "distance": float(r[7])
+            })
+        return results
+    except Exception as e:
+        print(f"Error in similarity search: {e}")
+        return []
