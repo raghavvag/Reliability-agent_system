@@ -5,8 +5,7 @@ sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
 from config import REDIS_CHANNEL, SLACK_CHANNEL
 from redis_client import get_redis_client, create_message_listener
-from db import get_incident, update_incident_status, insert_audit_log, init_connection_pool
-from retriever_pgvector import search_similar
+from db import get_incident, update_incident_status, insert_audit_log, init_connection_pool, close_connection_pool
 from llm_client import ask_llm
 from notifier import send_incident_message
 
@@ -44,13 +43,9 @@ def handle_incident_message(data):
 
         print(f"📋 Processing incident {incident_id}: {incident.get('summary_text', '')[:100]}...")
         
-        query_text = incident.get("summary_text") or (incident.get("evidence") or {}).get("payload", "")[:400] or ""
-        if not query_text:
-            print(f"No query text available for incident {incident_id}")
-            query_text = f"incident {incident_id}"
-        
-        print(f"🔍 Starting semantic search...")
-        related = search_similar(query_text, top_k=3)
+        # Skip semantic search for Windows compatibility
+        print(f"ℹ️ Semantic search disabled (Windows compatibility)")
+        related = []
         
         print(f"🤖 Starting LLM analysis...")
         ai_result = ask_llm(incident, related)
@@ -79,15 +74,7 @@ def listen_loop():
     print("🔌 Initializing database connection pool...")
     init_connection_pool()
     
-    # Pre-load the model to check for issues early
-    print("🤖 Pre-loading sentence transformer model...")
-    try:
-        from retriever_pgvector import get_model
-        get_model()
-        print("✅ Model pre-loaded successfully")
-    except Exception as e:
-        print(f"⚠️ Model pre-loading failed: {e}")
-        print("🔄 Continuing without model - semantic search will be disabled")
+    print("ℹ️ Production mode - semantic search disabled for Windows compatibility")
     
     print(f"📡 Creating message listener for channel: {REDIS_CHANNEL}")
     listener = create_message_listener(REDIS_CHANNEL)
@@ -101,7 +88,16 @@ def listen_loop():
         print(f"❌ Listener error: {e}")
         import traceback
         traceback.print_exc()
+    finally:
+        # Clean up database connections
+        try:
+            close_connection_pool()
+        except Exception as e:
+            print(f"⚠️ Error closing database pool: {e}")
 
 if __name__ == "__main__":
-    print("🔧 Initializing agent...")
-    listen_loop()
+    print("🔧 Initializing reliability agent...")
+    try:
+        listen_loop()
+    except KeyboardInterrupt:
+        print("\n🛑 Agent stopped")

@@ -21,6 +21,16 @@ def init_connection_pool():
             print(f"Error creating connection pool: {e}")
             raise
 
+def close_connection_pool():
+    global connection_pool
+    if connection_pool is not None:
+        try:
+            connection_pool.close()
+            connection_pool = None
+            print("Database connection pool closed")
+        except Exception as e:
+            print(f"Error closing connection pool: {e}")
+
 def get_conn():
     if connection_pool is None:
         init_connection_pool()
