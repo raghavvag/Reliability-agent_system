@@ -1,7 +1,14 @@
 import os, json
 import requests
-from config import OPENAI_API_KEY
-from prompt_templates import SUMMARY_PROMPT
+# Handle both relative and absolute imports
+try:
+    from .config import OPENAI_API_KEY
+except ImportError:
+    from config import OPENAI_API_KEY
+try:
+    from .prompt_templates import SUMMARY_PROMPT
+except ImportError:
+    from prompt_templates import SUMMARY_PROMPT
 
 # Lazy initialization of OpenAI client
 _client = None
@@ -55,7 +62,23 @@ def ask_llm(incident: dict, related_items: list):
         if related_items and isinstance(related_items, list):
             for it in related_items:
                 if isinstance(it, dict):
-                    related_text += f"- id:{it.get('memory_id')} | service:{it.get('service')} | summary:{(it.get('summary') or '')[:200]} | labels:{it.get('labels')}\n"
+                    similarity = it.get('similarity', 0)
+                    summary = (it.get('summary') or '')[:200]
+                    service = it.get('service', 'unknown')
+                    labels = it.get('labels', [])
+                    
+                    # Include solutions from similar incidents
+                    solution = it.get('solution', '')
+                    
+                    related_text += f"• Similar incident (similarity: {similarity})\n"
+                    related_text += f"  Service: {service} | Summary: {summary}\n"
+                    related_text += f"  Labels: {labels}\n"
+                    
+                    if solution:
+                        related_text += f"  Solution: {solution}\n"
+                    else:
+                        related_text += f"  Solution: Not provided yet\n"
+                    related_text += "\n"
         
         prompt = SUMMARY_PROMPT.format(
             service = incident.get("evidence", {}).get("service") if isinstance(incident.get("evidence"), dict) else "unknown",

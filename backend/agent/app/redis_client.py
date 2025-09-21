@@ -12,7 +12,12 @@ available configuration.
 import json
 import time
 from typing import Optional, Dict, Any
-from config import REDIS_URL, UPSTASH_REDIS_REST_URL, UPSTASH_REDIS_REST_TOKEN
+
+# Handle both relative and absolute imports
+try:
+    from .config import REDIS_URL, UPSTASH_REDIS_REST_URL, UPSTASH_REDIS_REST_TOKEN
+except ImportError:
+    from config import REDIS_URL, UPSTASH_REDIS_REST_URL, UPSTASH_REDIS_REST_TOKEN
 
 # Try to import both Redis clients
 try:

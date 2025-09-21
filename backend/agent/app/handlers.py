@@ -1,8 +1,49 @@
 from fastapi import FastAPI, Request, Header, HTTPException
 from slack_sdk.signature import SignatureVerifier
 import json
-from config import SLACK_SIGNING_SECRET
-from db import update_incident_status, insert_audit_log
+from .config import SLACK_SIGNING_SECRET
+from .db import update_incident_status, insert_audit_log, get_conn, return_conn
+
+def _extract_diversity_key(summary, service):
+    """Extract diversity key based on incident patterns."""
+    if summary and service:
+        # For SQL injection, look for different types
+        if "sql" in summary.lower() or "injection" in summary.lower():
+            if "union" in summary.lower():
+                return f"{service}_sql_union"
+            elif "blind" in summary.lower():
+                return f"{service}_sql_blind"
+            elif "time" in summary.lower() or "delay" in summary.lower():
+                return f"{service}_sql_time"
+            else:
+                return f"{service}_sql_generic"
+        
+        # For other incidents, use service + key terms
+        key_terms = ["auth", "permission", "timeout", "error", "crash", "memory", "performance"]
+        for term in key_terms:
+            if term in summary.lower():
+                return f"{service}_{term}"
+    
+    return f"{service or 'unknown'}_general"
+
+def _filter_diverse_results(incidents, max_per_key=1):
+    """Filter incidents to ensure diversity in patterns."""
+    diversity_map = {}
+    filtered_results = []
+    
+    for incident in incidents:
+        summary = incident.get('summary', '')
+        service = incident.get('service', '')
+        diversity_key = _extract_diversity_key(summary, service)
+        
+        if diversity_key not in diversity_map:
+            diversity_map[diversity_key] = 0
+        
+        if diversity_map[diversity_key] < max_per_key:
+            filtered_results.append(incident)
+            diversity_map[diversity_key] += 1
+    
+    return filtered_results
 
 app = FastAPI()
 verifier = SignatureVerifier(SLACK_SIGNING_SECRET)
@@ -76,6 +117,35 @@ async def slack_actions(request: Request, x_slack_signature: str = Header(None),
                 return {"text": f"Incident {incident_id} marked resolved by {user}"}
             else:
                 raise HTTPException(status_code=500, detail="Failed to update incident status")
+                
+        elif action_id == "add_solution":
+            # Handle solution updates
+            solution_text = action.get("selected_option", {}).get("text", {}).get("text", "")
+            if not solution_text:
+                raise HTTPException(status_code=400, detail="No solution text provided")
+            
+            # Update solution in memory_item table
+            conn = get_conn()
+            if conn:
+                try:
+                    cursor = conn.cursor()
+                    cursor.execute("""
+                        UPDATE memory_item 
+                        SET solution = %s
+                        WHERE id = %s
+                    """, (solution_text, str(incident_id)))
+                    
+                    if cursor.rowcount > 0:
+                        conn.commit()
+                        insert_audit_log(incident_id, user, "added_solution", {"solution": solution_text})
+                        return {"text": f"Solution added to incident {incident_id} by {user}"}
+                    else:
+                        raise HTTPException(status_code=404, detail="Incident not found in memory")
+                finally:
+                    cursor.close()
+                    return_conn(conn)
+            else:
+                raise HTTPException(status_code=500, detail="Database connection failed")
         else:
             raise HTTPException(status_code=400, detail=f"Unknown action: {action_id}")
             
@@ -83,4 +153,242 @@ async def slack_actions(request: Request, x_slack_signature: str = Header(None),
         raise HTTPException(status_code=400, detail="Invalid JSON payload")
     except Exception as e:
         print(f"Error processing Slack action: {e}")
+        raise HTTPException(status_code=500, detail="Internal server error")
+
+@app.post("/incidents/{incident_id}/solution")
+async def update_solution(incident_id: int, request: Request):
+    """Update solution for a specific incident"""
+    try:
+        body = await request.json()
+        solution = body.get("solution", "").strip()
+        user = body.get("user", "unknown")
+        
+        if not solution:
+            raise HTTPException(status_code=400, detail="Solution text is required")
+        
+        # Update solution in memory_item table
+        conn = get_conn()
+        if not conn:
+            raise HTTPException(status_code=500, detail="Database connection failed")
+        
+        try:
+            cursor = conn.cursor()
+            cursor.execute("""
+                UPDATE memory_item 
+                SET solution = %s
+                WHERE id = %s
+            """, (solution, str(incident_id)))
+            
+            if cursor.rowcount > 0:
+                conn.commit()
+                insert_audit_log(incident_id, user, "added_solution", {"solution": solution})
+                return {"message": f"Solution updated for incident {incident_id}", "success": True}
+            else:
+                raise HTTPException(status_code=404, detail="Incident not found in memory")
+        finally:
+            cursor.close()
+            return_conn(conn)
+            
+    except json.JSONDecodeError:
+        raise HTTPException(status_code=400, detail="Invalid JSON")
+    except Exception as e:
+        print(f"Error updating solution: {e}")
+        raise HTTPException(status_code=500, detail="Internal server error")
+
+@app.get("/incidents/similar")
+async def get_similar_incidents(service: str = None, labels: str = None, limit: int = 3):
+    """Get similar incidents with their solutions for frontend display"""
+    try:
+        conn = get_conn()
+        if not conn:
+            raise HTTPException(status_code=500, detail="Database connection failed")
+        
+        try:
+            cursor = conn.cursor()
+            
+            # Build query based on parameters
+            if service and labels:
+                # Parse labels from comma-separated string
+                label_list = [label.strip() for label in labels.split(',') if label.strip()]
+                cursor.execute("""
+                    SELECT id, summary, labels, service, incident_type, solution
+                    FROM memory_item 
+                    WHERE service = %s OR labels && %s
+                    ORDER BY id DESC
+                    LIMIT %s
+                """, (service, label_list, limit))
+            elif service:
+                cursor.execute("""
+                    SELECT id, summary, labels, service, incident_type, solution
+                    FROM memory_item 
+                    WHERE service = %s
+                    ORDER BY id DESC
+                    LIMIT %s
+                """, (service, limit))
+            elif labels:
+                label_list = [label.strip() for label in labels.split(',') if label.strip()]
+                cursor.execute("""
+                    SELECT id, summary, labels, service, incident_type, solution
+                    FROM memory_item 
+                    WHERE labels && %s
+                    ORDER BY id DESC
+                    LIMIT %s
+                """, (label_list, limit))
+            else:
+                # Get recent incidents if no filters
+                cursor.execute("""
+                    SELECT id, summary, labels, service, incident_type, solution
+                    FROM memory_item 
+                    ORDER BY id DESC
+                    LIMIT %s
+                """, (limit,))
+            
+            rows = cursor.fetchall()
+            results = []
+            
+            for row in rows:
+                results.append({
+                    'incident_id': row[0],
+                    'summary': row[1],
+                    'labels': row[2] or [],
+                    'service': row[3],
+                    'incident_type': row[4],
+                    'solution': row[5],
+                    'has_solution': bool(row[5])
+                })
+            
+            return {
+                "similar_incidents": results,
+                "count": len(results),
+                "filters": {
+                    "service": service,
+                    "labels": labels.split(',') if labels else None,
+                    "limit": limit
+                }
+            }
+            
+        finally:
+            cursor.close()
+            return_conn(conn)
+            
+    except Exception as e:
+        print(f"Error fetching similar incidents: {e}")
+        raise HTTPException(status_code=500, detail="Internal server error")
+
+@app.post("/semantic-search")
+async def semantic_search(request: Request):
+    """
+    Semantic search endpoint that:
+    1. Takes incident query text
+    2. Converts to embeddings using OpenAI
+    3. Finds similar incidents using pgvector based on summary similarity
+    4. Returns top results with solutions
+    """
+    try:
+        body = await request.json()
+        query_text = body.get("query", body.get("summary", "")).strip()
+        limit = body.get("limit", 3)
+        similarity_threshold = body.get("similarity_threshold", body.get("threshold", 0.7))
+        
+        if not query_text:
+            raise HTTPException(status_code=400, detail="Query text is required")
+
+        # Get OpenAI embedding for the query
+        from .llm_client import get_openai_client
+        import requests as req
+        
+        client = get_openai_client()
+        if not hasattr(client, 'api_key'):
+            raise HTTPException(status_code=500, detail="OpenAI client not properly configured")
+        
+        # Get embedding
+        headers = {
+            "Authorization": f"Bearer {client.api_key}",
+            "Content-Type": "application/json"
+        }
+        
+        data = {
+            "input": query_text,
+            "model": "text-embedding-3-small"
+        }
+        
+        response = req.post(
+            "https://api.openai.com/v1/embeddings",
+            headers=headers,
+            json=data,
+            timeout=30
+        )
+        
+        if response.status_code != 200:
+            raise HTTPException(status_code=500, detail=f"Embedding API error: {response.text}")
+        
+        embedding_result = response.json()
+        query_embedding = embedding_result['data'][0]['embedding']
+        
+        # Search similar incidents using pgvector based on summary similarity
+        with get_conn() as conn:
+            with conn.cursor() as cursor:
+                # Get more results initially to enable diversity filtering
+                initial_limit = limit * 3  # Get three times as many results for diversity
+                
+                cursor.execute("""
+                    SELECT id, summary, labels, service, incident_type, solution,
+                           1 - (embedding <=> %s::vector) as similarity
+                    FROM memory_item 
+                    WHERE embedding IS NOT NULL
+                    AND 1 - (embedding <=> %s::vector) > %s
+                    ORDER BY embedding <=> %s::vector
+                    LIMIT %s
+                """, (query_embedding, query_embedding, similarity_threshold, query_embedding, initial_limit))
+                
+                all_rows = cursor.fetchall()
+                
+                # Apply diversity filtering to get varied results
+                results = []
+                used_patterns = set()
+                
+                for row in all_rows:
+                    if len(results) >= limit:
+                        break
+                        
+                    summary = row[1] or ""
+                    service = row[3] or "unknown"
+                    
+                    # Create a diversity key based on service and summary patterns
+                    diversity_key = _extract_diversity_key(summary, service)
+                    
+                    # If we haven't seen this pattern type yet, or if we have few results, include it
+                    if diversity_key not in used_patterns or len(results) < limit // 2:
+                        results.append({
+                            'incident_id': row[0],
+                            'summary': summary,
+                            'labels': row[2] or [],
+                            'service': service,
+                            'incident_type': row[4] or "incident",
+                            'solution': row[5],
+                            'similarity': round(row[6], 3),
+                            'has_solution': bool(row[5] and row[5].strip())
+                        })
+                        used_patterns.add(diversity_key)
+                
+                return {
+                    "status": "success",
+                    "query": query_text,
+                    "incidents": results,
+                    "total_found": len(results),
+                    "query_embedding_generated": True,
+                    "search_threshold": similarity_threshold,
+                    "diversity_filtering_applied": True,
+                    "search_params": {
+                        "similarity_threshold": similarity_threshold,
+                        "limit": limit,
+                        "embedding_model": "text-embedding-3-small",
+                        "diversity_enabled": True
+                    }
+                }
+            
+    except json.JSONDecodeError:
+        raise HTTPException(status_code=400, detail="Invalid JSON")
+    except Exception as e:
+        print(f"Error in semantic search: {e}")
         raise HTTPException(status_code=500, detail="Internal server error")

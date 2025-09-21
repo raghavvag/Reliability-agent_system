@@ -1,7 +1,13 @@
 import os, json
 import psycopg
 from psycopg_pool import ConnectionPool
-from config import DATABASE_URL
+
+# Handle both relative and absolute imports
+try:
+    from .config import DATABASE_URL
+except ImportError:
+    from config import DATABASE_URL
+
 import logging
 
 # Connection pool for better performance
