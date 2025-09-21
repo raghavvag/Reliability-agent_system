@@ -17,8 +17,10 @@ def get_openai_client():
 def ask_llm(incident: dict, related_items: list):
     try:
         related_text = ""
-        for it in related_items:
-            related_text += f"- id:{it.get('memory_id')} | service:{it.get('service')} | summary:{(it.get('summary') or '')[:200]} | labels:{it.get('labels')}\n"
+        if related_items and isinstance(related_items, list):
+            for it in related_items:
+                if isinstance(it, dict):
+                    related_text += f"- id:{it.get('memory_id')} | service:{it.get('service')} | summary:{(it.get('summary') or '')[:200]} | labels:{it.get('labels')}\n"
         
         prompt = SUMMARY_PROMPT.format(
             service = incident.get("evidence", {}).get("service") or incident.get("summary_text",""),

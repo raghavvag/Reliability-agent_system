@@ -196,11 +196,18 @@ class RedisMessageListener:
         """Listen using polling (for Upstash REST API)"""
         print(f"🎯 Agent listening on Redis channel {self.channel} (polling)")
         
+        consecutive_errors = 0
+        max_consecutive_errors = 5
+        
         while self.running:
             try:
                 # Use RPOP to get messages from the list (FIFO queue)
                 # Messages are added with LPUSH, so RPOP gives oldest first
                 message = self.redis_client.rpop(self.channel)
+                
+                # Reset error counter on successful Redis operation
+                consecutive_errors = 0
+                
                 if message:
                     try:
                         print(f"📨 Processing message from {self.channel}")
@@ -215,22 +222,35 @@ class RedisMessageListener:
                         else:
                             # Message is already parsed
                             data = message
+                            print(f"🔄 Calling callback for incident processing...")
                             callback_func(data)
+                            print(f"✅ Message processed successfully")
                             continue
                         
                         # Parse JSON string to dict
                         data = json.loads(message_str)
+                        print(f"🔄 Calling callback for incident processing...")
                         callback_func(data)
+                        print(f"✅ Message processed successfully")
                         
                     except Exception as exc:
                         print(f"❌ Error handling message: {exc}")
                         print(f"📄 Raw message: {message}")
+                        import traceback
+                        traceback.print_exc()
                 else:
                     # No messages, wait a bit before checking again
+                    print("⏳ No messages, waiting...")
                     time.sleep(2)
                 
             except Exception as e:
-                print(f"❌ Error in polling loop: {e}")
+                consecutive_errors += 1
+                print(f"❌ Error in polling loop (#{consecutive_errors}): {e}")
+                
+                if consecutive_errors >= max_consecutive_errors:
+                    print(f"🚨 Too many consecutive errors ({consecutive_errors}), stopping listener")
+                    break
+                    
                 time.sleep(5)  # Wait longer on error
     
     def stop(self):
