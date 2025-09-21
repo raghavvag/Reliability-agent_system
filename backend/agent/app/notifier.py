@@ -1,5 +1,5 @@
 from slack_sdk import WebClient
-from config import SLACK_BOT_TOKEN, SLACK_CHANNEL
+from .config import SLACK_BOT_TOKEN, SLACK_CHANNEL
 
 slack = WebClient(token=SLACK_BOT_TOKEN)
 

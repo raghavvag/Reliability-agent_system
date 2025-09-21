@@ -41,40 +41,43 @@ def check_config():
 def check_database():
     """Check database connectivity"""
     try:
-        from app.db import get_conn, return_conn
+        from app.db import connection_pool, init_connection_pool
         
-        conn = get_conn()
-        with conn.cursor() as cur:
-            cur.execute("SELECT 1;")
-            result = cur.fetchone()
-            if result[0] == 1:
-                print("✅ Database connection successful")
-            else:
-                print("❌ Database query failed")
-                return False
-        return_conn(conn)
+        # Initialize connection pool if not already done
+        if connection_pool is None:
+            init_connection_pool()
+        
+        # Test basic connection
+        with connection_pool.connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute("SELECT 1;")
+                result = cur.fetchone()
+                if result[0] == 1:
+                    print("✅ Database connection successful")
+                else:
+                    print("❌ Database query failed")
+                    return False
         
         # Check if tables exist
-        conn = get_conn()
-        with conn.cursor() as cur:
-            cur.execute("""
-                SELECT table_name FROM information_schema.tables 
-                WHERE table_schema = 'public' 
-                AND table_name IN ('incidents', 'memory_item', 'audit_logs', 'raw_events');
-            """)
-            tables = [row[0] for row in cur.fetchall()]
-            
-            required_tables = ['incidents', 'memory_item', 'audit_logs', 'raw_events']
-            missing_tables = [t for t in required_tables if t not in tables]
-            
-            if missing_tables:
-                print(f"❌ Missing database tables: {missing_tables}")
-                print("   Run: python tests/setup_database.py")
-                return False
-            else:
-                print("✅ All required database tables exist")
+        with connection_pool.connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    SELECT table_name FROM information_schema.tables 
+                    WHERE table_schema = 'public' 
+                    AND table_name IN ('incidents', 'memory_item', 'audit_logs', 'raw_events');
+                """)
+                tables = [row[0] for row in cur.fetchall()]
+                
+                required_tables = ['incidents', 'memory_item', 'audit_logs', 'raw_events']
+                missing_tables = [t for t in required_tables if t not in tables]
+                
+                if missing_tables:
+                    print(f"❌ Missing database tables: {missing_tables}")
+                    print("   Run: python tests/setup_database.py")
+                    return False
+                else:
+                    print("✅ All required database tables exist")
         
-        return_conn(conn)
         return True
         
     except Exception as e:
@@ -84,30 +87,41 @@ def check_database():
 def check_redis():
     """Check Redis connectivity"""
     try:
-        import redis
-        from app.config import REDIS_URL
+        from app.redis_client import get_redis_client
         
-        r = redis.Redis.from_url(REDIS_URL, decode_responses=True)
+        redis_client = get_redis_client()
         
-        if r.ping():
+        if redis_client.ping():
             print("✅ Redis connection successful")
+            print(f"   Using: {redis_client.client_type} Redis client")
             
-            # Test pub/sub
-            pubsub = r.pubsub()
-            pubsub.subscribe('test_channel')
-            r.publish('test_channel', 'test_message')
-            
-            # Try to get the message (with timeout)
-            message = pubsub.get_message(timeout=1)
-            if message and message['type'] == 'subscribe':
-                # Get the actual message
+            # Test pub/sub only for standard Redis
+            if redis_client.client_type == "standard":
+                pubsub = redis_client.subscribe('test_channel')
+                redis_client.publish('test_channel', 'test_message')
+                
+                # Try to get the message (with timeout)
                 message = pubsub.get_message(timeout=1)
-                if message and message['data'] == 'test_message':
-                    print("✅ Redis pub/sub working")
+                if message and message['type'] == 'subscribe':
+                    # Get the actual message
+                    message = pubsub.get_message(timeout=1)
+                    if message and message['data'] == 'test_message':
+                        print("✅ Redis pub/sub working")
+                    else:
+                        print("⚠️  Redis pub/sub may have issues")
+                
+                pubsub.close()
+            else:
+                # For Upstash, test basic operations
+                test_key = "test_health_check"
+                redis_client.set(test_key, "test_value", ex=10)
+                value = redis_client.get(test_key)
+                if value == "test_value":
+                    print("✅ Redis REST API operations working")
+                    redis_client.delete(test_key)
                 else:
-                    print("⚠️  Redis pub/sub may have issues")
+                    print("⚠️  Redis REST API may have issues")
             
-            pubsub.close()
             return True
         else:
             print("❌ Redis ping failed")
@@ -183,25 +197,28 @@ def check_embeddings():
 def check_sample_data():
     """Check if sample data exists"""
     try:
-        from app.db import get_conn, return_conn
+        from app.db import connection_pool, init_connection_pool
         
-        conn = get_conn()
-        with conn.cursor() as cur:
-            cur.execute("SELECT COUNT(*) FROM incidents;")
-            incident_count = cur.fetchone()[0]
-            
-            cur.execute("SELECT COUNT(*) FROM memory_item;")
-            memory_count = cur.fetchone()[0]
-            
-            if incident_count > 0 and memory_count > 0:
-                print(f"✅ Sample data exists ({incident_count} incidents, {memory_count} memory items)")
-            elif incident_count == 0 and memory_count == 0:
-                print("ℹ️  No sample data found")
-                print("   Run: python tests/setup_database.py --sample-data")
-            else:
-                print(f"⚠️  Partial sample data ({incident_count} incidents, {memory_count} memory items)")
+        # Initialize connection pool if not already done
+        if connection_pool is None:
+            init_connection_pool()
         
-        return_conn(conn)
+        with connection_pool.connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute("SELECT COUNT(*) FROM incidents;")
+                incident_count = cur.fetchone()[0]
+                
+                cur.execute("SELECT COUNT(*) FROM memory_item;")
+                memory_count = cur.fetchone()[0]
+                
+                if incident_count > 0 and memory_count > 0:
+                    print(f"✅ Sample data exists ({incident_count} incidents, {memory_count} memory items)")
+                elif incident_count == 0 and memory_count == 0:
+                    print("ℹ️  No sample data found")
+                    print("   Run: python tests/setup_database.py --sample-data")
+                else:
+                    print(f"⚠️  Partial sample data ({incident_count} incidents, {memory_count} memory items)")
+        
         return True
         
     except Exception as e:

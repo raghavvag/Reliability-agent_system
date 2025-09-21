@@ -1,12 +1,12 @@
 import json
-from redis import Redis
-from config import REDIS_URL, REDIS_CHANNEL, SLACK_CHANNEL
-from db import get_incident, update_incident_status, insert_audit_log
-from retriever_pgvector import search_similar
-from llm_client import ask_llm
-from notifier import send_incident_message
+from .config import REDIS_CHANNEL, SLACK_CHANNEL
+from .redis_client import get_redis_client, create_message_listener
+from .db import get_incident, update_incident_status, insert_audit_log
+from .retriever_pgvector import search_similar
+from .llm_client import ask_llm
+from .notifier import send_incident_message
 
-r = Redis.from_url(REDIS_URL, decode_responses=True)
+redis_client = get_redis_client()
 
 def handle_incident_message(data):
     try:
@@ -56,16 +56,8 @@ def handle_incident_message(data):
         # Log the error but don't crash the entire service
 
 def listen_loop():
-    pubsub = r.pubsub()
-    pubsub.subscribe(REDIS_CHANNEL)
-    print("Agent listening on Redis channel", REDIS_CHANNEL)
-    for item in pubsub.listen():
-        if item["type"] != "message": continue
-        try:
-            data = json.loads(item["data"])
-            handle_incident_message(data)
-        except Exception as exc:
-            print("Error handling incident message:", exc)
+    listener = create_message_listener(REDIS_CHANNEL)
+    listener.listen(handle_incident_message)
 
 if __name__ == "__main__":
     listen_loop()

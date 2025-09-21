@@ -12,12 +12,12 @@ Examples:
 
 import sys
 import json
-import redis
 from pathlib import Path
 
 # Add parent directory to path to import config
 sys.path.insert(0, str(Path(__file__).parent.parent))
-from app.config import REDIS_URL, REDIS_CHANNEL
+from app.redis_client import get_redis_client
+from app.config import REDIS_CHANNEL
 
 def publish_incident(incident_id):
     """Publish incident_ready message to Redis"""
@@ -28,11 +28,11 @@ def publish_incident(incident_id):
             print(f"Error: incident_id must be positive, got {incident_id}")
             return False
             
-        # Connect to Redis
-        r = redis.Redis.from_url(REDIS_URL, decode_responses=True)
+        # Get Redis client
+        redis_client = get_redis_client()
         
         # Test connection
-        if not r.ping():
+        if not redis_client.ping():
             print("Error: Cannot connect to Redis")
             return False
             
@@ -41,7 +41,7 @@ def publish_incident(incident_id):
         message_json = json.dumps(message)
         
         # Publish message
-        result = r.publish(REDIS_CHANNEL, message_json)
+        result = redis_client.publish(REDIS_CHANNEL, message_json)
         
         if result > 0:
             print(f"✅ Successfully published to Redis:")
@@ -57,17 +57,13 @@ def publish_incident(incident_id):
     except ValueError:
         print(f"Error: Invalid incident_id '{incident_id}', must be an integer")
         return False
-    except redis.RedisError as e:
-        print(f"Error connecting to Redis: {e}")
-        return False
     except Exception as e:
-        print(f"Unexpected error: {e}")
+        print(f"Error connecting to Redis: {e}")
         return False
 
 def main():
     print("🚀 Incident Ready Message Publisher")
     print("=" * 40)
-    print(f"Redis URL: {REDIS_URL}")
     print(f"Channel: {REDIS_CHANNEL}")
     print()
     

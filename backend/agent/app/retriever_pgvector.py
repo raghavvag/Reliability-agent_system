@@ -1,4 +1,4 @@
-from config import DATABASE_URL, EMBED_MODEL_NAME
+from .config import DATABASE_URL, EMBED_MODEL_NAME
 from sentence_transformers import SentenceTransformer
 import psycopg
 from typing import List, Dict

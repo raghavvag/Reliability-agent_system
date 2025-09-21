@@ -1,8 +1,8 @@
 from fastapi import FastAPI, Request, Header, HTTPException
 from slack_sdk.signature import SignatureVerifier
 import json
-from config import SLACK_SIGNING_SECRET
-from db import update_incident_status, insert_audit_log
+from .config import SLACK_SIGNING_SECRET
+from .db import update_incident_status, insert_audit_log
 
 app = FastAPI()
 verifier = SignatureVerifier(SLACK_SIGNING_SECRET)

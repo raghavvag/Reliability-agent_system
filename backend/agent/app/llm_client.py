@@ -1,7 +1,7 @@
 import os, json
 from openai import OpenAI
-from config import OPENAI_API_KEY
-from prompt_templates import SUMMARY_PROMPT
+from .config import OPENAI_API_KEY
+from .prompt_templates import SUMMARY_PROMPT
 
 client = OpenAI(api_key=OPENAI_API_KEY)
 
