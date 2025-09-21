@@ -1,10 +1,14 @@
 # AI-Powered Incident Management Assistant
 
 ## All repositories :
-Ai Agent: https://github.com/raghavvag/Reliability-agent_system.git
-Worker Service:https://github.com/VaniVerma16/ragent
-Data Ingestion Pipeline:https://github.com/AaryanCode69/Ingestion-Pipeline
-
+### Ai Agent 
+https://github.com/raghavvag/Reliability-agent_system.git
+### Worker Service
+https://github.com/VaniVerma16/ragent
+### Data Ingestion Pipeline
+https://github.com/AaryanCode69/Ingestion-Pipeline
+### figma link
+https://www.figma.com/design/gSFDNnmtxn9c147EN580sm/Untitled?node-id=8-2&t=SbdkjGROMoygNVYq-1
 ## Overview
 This system processes incidents from raw events, performs AI-powered analysis, and sends interactive Slack notifications for incident management.
 
