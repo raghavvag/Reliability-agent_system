@@ -1,9 +1,18 @@
 import os, json
-from openai import OpenAI
-from .config import OPENAI_API_KEY
-from .prompt_templates import SUMMARY_PROMPT
+from config import OPENAI_API_KEY
+from prompt_templates import SUMMARY_PROMPT
 
-client = OpenAI(api_key=OPENAI_API_KEY)
+# Lazy initialization of OpenAI client
+_client = None
+
+def get_openai_client():
+    global _client
+    if _client is None:
+        print("🤖 Initializing OpenAI client...")
+        from openai import OpenAI
+        _client = OpenAI(api_key=OPENAI_API_KEY)
+        print("✅ OpenAI client initialized")
+    return _client
 
 def ask_llm(incident: dict, related_items: list):
     try:
@@ -20,7 +29,7 @@ def ask_llm(incident: dict, related_items: list):
             related_list = related_text or "None"
         )
         
-        response = client.chat.completions.create(
+        response = get_openai_client().chat.completions.create(
             model="gpt-4o-mini",   # change model if needed
             messages=[{"role":"user","content":prompt}],
             temperature=0.0,

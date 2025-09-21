@@ -1,14 +1,29 @@
-from .config import DATABASE_URL, EMBED_MODEL_NAME
-from sentence_transformers import SentenceTransformer
+from config import DATABASE_URL, EMBED_MODEL_NAME
 import psycopg
 from typing import List, Dict
+import os
+from pathlib import Path
 
-# lazy-load model
+# Get the local models directory
+MODELS_DIR = Path(__file__).parent.parent / "models"
+
+# lazy-load model and sentence transformers import
 _model = None
 def get_model():
     global _model
     if _model is None:
-        _model = SentenceTransformer(EMBED_MODEL_NAME)
+        print(f"🤖 Loading sentence transformer module...")
+        from sentence_transformers import SentenceTransformer
+        
+        # Try to load from local models directory first
+        if MODELS_DIR.exists():
+            print(f"📁 Loading model from local cache: {MODELS_DIR}")
+            _model = SentenceTransformer(EMBED_MODEL_NAME, cache_folder=str(MODELS_DIR))
+        else:
+            print(f"🌐 Loading model from HuggingFace: {EMBED_MODEL_NAME}")
+            _model = SentenceTransformer(EMBED_MODEL_NAME)
+        
+        print("✅ Model loaded successfully")
     return _model
 
 def embed_text(text: str) -> List[float]:

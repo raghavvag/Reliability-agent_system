@@ -15,9 +15,9 @@ import json
 from pathlib import Path
 
 # Add parent directory to path to import config
-sys.path.insert(0, str(Path(__file__).parent.parent))
-from app.redis_client import get_redis_client
-from app.config import REDIS_CHANNEL
+sys.path.insert(0, str(Path(__file__).parent.parent / 'app'))
+from redis_client import get_redis_client
+from config import REDIS_CHANNEL
 
 def publish_incident(incident_id):
     """Publish incident_ready message to Redis"""

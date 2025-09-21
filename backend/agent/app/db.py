@@ -1,7 +1,7 @@
 import os, json
 import psycopg
 from psycopg_pool import ConnectionPool
-from .config import DATABASE_URL
+from config import DATABASE_URL
 import logging
 
 # Connection pool for better performance

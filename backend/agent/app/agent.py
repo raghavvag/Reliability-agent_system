@@ -1,17 +1,24 @@
 import json
-from .config import REDIS_CHANNEL, SLACK_CHANNEL
-from .redis_client import get_redis_client, create_message_listener
-from .db import get_incident, update_incident_status, insert_audit_log
-from .retriever_pgvector import search_similar
-from .llm_client import ask_llm
-from .notifier import send_incident_message
+import sys
+import os
+sys.path.append(os.path.dirname(os.path.abspath(__file__)))
+
+from config import REDIS_CHANNEL, SLACK_CHANNEL
+from redis_client import get_redis_client, create_message_listener
+from db import get_incident, update_incident_status, insert_audit_log, init_connection_pool
+from retriever_pgvector import search_similar
+from llm_client import ask_llm
+from notifier import send_incident_message
 
 redis_client = get_redis_client()
 
 def handle_incident_message(data):
     try:
+        print(f"📥 Raw message received: {type(data)} - {str(data)[:100]}...")
+        
         if not isinstance(data, dict):
-            print("Invalid message format: expected dict")
+            print(f"⚠️ Invalid message format: expected dict, got {type(data)}")
+            print(f"📄 Message content: {data}")
             return
             
         if "incident_id" not in data:
@@ -56,8 +63,14 @@ def handle_incident_message(data):
         # Log the error but don't crash the entire service
 
 def listen_loop():
+    print("🚀 Starting reliability agent...")
+    print("🔌 Initializing database connection pool...")
+    init_connection_pool()
+    print(f"📡 Creating message listener for channel: {REDIS_CHANNEL}")
     listener = create_message_listener(REDIS_CHANNEL)
+    print("🎧 Starting to listen for messages...")
     listener.listen(handle_incident_message)
 
 if __name__ == "__main__":
+    print("🔧 Initializing agent...")
     listen_loop()

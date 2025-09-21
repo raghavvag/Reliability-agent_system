@@ -13,12 +13,12 @@ import json
 from pathlib import Path
 
 # Add parent directory to path to import modules
-sys.path.insert(0, str(Path(__file__).parent.parent))
+sys.path.insert(0, str(Path(__file__).parent.parent / 'app'))
 
 def check_config():
     """Check configuration loading"""
     try:
-        from app.config import DATABASE_URL, REDIS_URL, OPENAI_API_KEY, SLACK_BOT_TOKEN
+        from config import DATABASE_URL, REDIS_URL, OPENAI_API_KEY, SLACK_BOT_TOKEN
         print("✅ Configuration loaded successfully")
         
         # Check required variables are set
@@ -41,7 +41,7 @@ def check_config():
 def check_database():
     """Check database connectivity"""
     try:
-        from app.db import connection_pool, init_connection_pool
+        from db import connection_pool, init_connection_pool
         
         # Initialize connection pool if not already done
         if connection_pool is None:
@@ -87,7 +87,7 @@ def check_database():
 def check_redis():
     """Check Redis connectivity"""
     try:
-        from app.redis_client import get_redis_client
+        from redis_client import get_redis_client
         
         redis_client = get_redis_client()
         
@@ -134,7 +134,7 @@ def check_redis():
 def check_openai():
     """Check OpenAI API connectivity"""
     try:
-        from app.llm_client import client
+        from llm_client import client
         
         # Try to list models (lightweight API call)
         models = client.models.list()
@@ -153,7 +153,7 @@ def check_slack():
     """Check Slack API connectivity"""
     try:
         from slack_sdk import WebClient
-        from app.config import SLACK_BOT_TOKEN
+        from config import SLACK_BOT_TOKEN
         
         client = WebClient(token=SLACK_BOT_TOKEN)
         
@@ -173,7 +173,7 @@ def check_slack():
 def check_embeddings():
     """Check embedding model loading"""
     try:
-        from app.retriever_pgvector import get_model, embed_text
+        from retriever_pgvector import get_model, embed_text
         
         # Load model
         model = get_model()
@@ -197,7 +197,7 @@ def check_embeddings():
 def check_sample_data():
     """Check if sample data exists"""
     try:
-        from app.db import connection_pool, init_connection_pool
+        from db import connection_pool, init_connection_pool
         
         # Initialize connection pool if not already done
         if connection_pool is None:

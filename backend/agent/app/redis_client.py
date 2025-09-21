@@ -12,7 +12,7 @@ available configuration.
 import json
 import time
 from typing import Optional, Dict, Any
-from .config import REDIS_URL, UPSTASH_REDIS_REST_URL, UPSTASH_REDIS_REST_TOKEN
+from config import REDIS_URL, UPSTASH_REDIS_REST_URL, UPSTASH_REDIS_REST_TOKEN
 
 # Try to import both Redis clients
 try:
@@ -142,6 +142,17 @@ class UnifiedRedisClient:
         except Exception as e:
             print(f"Error deleting from Redis: {e}")
             return 0
+    
+    def rpop(self, key: str) -> Optional[str]:
+        """Remove and return the last element from a list"""
+        try:
+            if self.client_type == "upstash":
+                return self.client.rpop(key)
+            else:
+                return self.client.rpop(key)
+        except Exception as e:
+            print(f"Error rpop from Redis: {e}")
+            return None
 
 class RedisMessageListener:
     """
@@ -183,29 +194,43 @@ class RedisMessageListener:
     
     def _listen_polling(self, callback_func):
         """Listen using polling (for Upstash REST API)"""
-        print(f"Agent listening on Redis channel {self.channel} (polling)")
-        message_key = f"queue:{self.channel}"
+        print(f"🎯 Agent listening on Redis channel {self.channel} (polling)")
         
         while self.running:
             try:
-                # Poll for messages in a list/queue structure
-                # Note: This is a simplified approach. In production, you might want
-                # to use a more sophisticated queuing mechanism with Upstash
-                message = self.redis_client.get(message_key)
+                # Use RPOP to get messages from the list (FIFO queue)
+                # Messages are added with LPUSH, so RPOP gives oldest first
+                message = self.redis_client.rpop(self.channel)
                 if message:
                     try:
-                        data = json.loads(message)
-                        # Remove the processed message
-                        self.redis_client.delete(message_key)
+                        print(f"📨 Processing message from {self.channel}")
+                        
+                        # Handle different message formats
+                        if isinstance(message, list) and len(message) > 0:
+                            # Message is a list with JSON string as first element
+                            message_str = message[0]
+                        elif isinstance(message, str):
+                            # Message is already a string
+                            message_str = message
+                        else:
+                            # Message is already parsed
+                            data = message
+                            callback_func(data)
+                            continue
+                        
+                        # Parse JSON string to dict
+                        data = json.loads(message_str)
                         callback_func(data)
+                        
                     except Exception as exc:
-                        print("Error handling message:", exc)
-                
-                # Poll every second
-                time.sleep(1)
+                        print(f"❌ Error handling message: {exc}")
+                        print(f"📄 Raw message: {message}")
+                else:
+                    # No messages, wait a bit before checking again
+                    time.sleep(2)
                 
             except Exception as e:
-                print(f"Error in polling loop: {e}")
+                print(f"❌ Error in polling loop: {e}")
                 time.sleep(5)  # Wait longer on error
     
     def stop(self):
