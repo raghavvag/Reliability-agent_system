@@ -8,6 +8,7 @@ from redis_client import get_redis_client, create_message_listener
 from db import get_incident, update_incident_status, insert_audit_log, init_connection_pool, close_connection_pool, get_conn, return_conn
 from llm_client import ask_llm
 from notifier import send_incident_message
+from incident_router import notify_incident
 
 redis_client = get_redis_client()
 
@@ -41,13 +42,13 @@ def handle_incident_message(data):
             print("No incident row for id", incident_id)
             return
 
-        print(f"📋 Processing incident {incident_id}: {incident.get('summary_text', '')[:100]}...")
+        print(f"📋 Processing incident {incident_id}: {incident.get('summary', '')[:100]}...")
         
         # Enable semantic search with pgvector via FastAPI
         print(f"🔍 Searching for similar incidents...")
         related = []
         try:
-            query_text = incident.get('summary_text', '') or incident.get('summary', '')
+            query_text = incident.get('summary_text', incident.get('summary', ''))
             if query_text:
                 # Use FastAPI semantic search endpoint for summary-based matching
                 print(f"🔍 Running semantic search for: {query_text[:50]}...")
@@ -56,8 +57,11 @@ def handle_incident_message(data):
                     # Call FastAPI semantic search endpoint
                     import requests as req
                     
+                    semantic_search_url = "http://127.0.0.1:8001/semantic-search"
+                    print(f"🔗 Calling semantic search at: {semantic_search_url}")
+                    
                     response = req.post(
-                        "http://127.0.0.1:8001/semantic-search",
+                        semantic_search_url,
                         json={"query": query_text, "limit": 3, "similarity_threshold": 0.5},
                         headers={"Content-Type": "application/json"},
                         timeout=30
@@ -86,6 +90,8 @@ def handle_incident_message(data):
                         
                 except Exception as api_error:
                     print(f"⚠️ FastAPI call failed, falling back to basic search: {api_error}")
+                    print(f"🔍 Attempted URL: {semantic_search_url}")
+                    print(f"🔍 Query data: {{'query': '{query_text[:30]}...', 'limit': 3, 'similarity_threshold': 0.5}}")
                     
                     # Fallback to basic similarity search - only show incidents with solutions
                     with get_conn() as conn:
@@ -153,7 +159,7 @@ def handle_incident_message(data):
             with get_conn() as conn:
                 with conn.cursor() as cursor:
                     memory_id = str(incident_id)  # Convert to string for database
-                    summary = incident.get('summary_text', incident.get('summary', ''))
+                    summary = incident.get('summary', '')
                     service = incident.get('evidence', {}).get('service') if isinstance(incident.get('evidence'), dict) else 'unknown'
                     labels = incident.get('labels', [])
                     
@@ -181,12 +187,33 @@ def handle_incident_message(data):
         except Exception as e:
             print(f"⚠️ Failed to save to vector memory: {e}")
             
-        print(f"📤 Sending Slack notification...")
-        send_incident_message(channel=SLACK_CHANNEL, incident=incident, ai_result=ai_result, similar_incidents=related)
+        print(f"📤 Sending notifications via routing system...")
+        
+        # Use the new notification routing system
+        notification_results = notify_incident(
+            incident=incident,
+            ai_result=ai_result,
+            similar_incidents=related
+        )
+        
+        # Log notification results
+        print(f"📊 Notification Results:")
+        print(f"   - Incident Type: {notification_results.get('incident_type')}")
+        print(f"   - Team Assigned: {notification_results.get('team_assigned')}")
+        print(f"   - Slack Success: {notification_results.get('slack_success')}")
+        print(f"   - Email Success: {notification_results.get('email_success')}")
+        print(f"   - Total Sent: {notification_results.get('notifications_sent')}/2")
+        
+        if notification_results.get('errors'):
+            print(f"   - Errors: {notification_results['errors']}")
         
         print(f"💾 Updating incident status...")
-        update_incident_status(incident_id, "notified")
-        insert_audit_log(incident_id, "agent", "notified", {"ai_summary": ai_result.get("summary","")})
+        update_incident_status(incident_id, "ack")  # Use 'ack' instead of 'notified'
+        insert_audit_log(incident_id, "agent", "acknowledged", {
+            "ai_summary": ai_result.get("summary",""),
+            "notification_results": notification_results,
+            "notifications_sent": True
+        })
         
         print(f"✅ Successfully processed incident {incident_id}")
         

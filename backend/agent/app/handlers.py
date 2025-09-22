@@ -2,7 +2,20 @@ from fastapi import FastAPI, Request, Header, HTTPException
 from slack_sdk.signature import SignatureVerifier
 import json
 from .config import SLACK_SIGNING_SECRET
-from .db import update_incident_status, insert_audit_log, get_conn, return_conn
+from .db import update_incident_status, insert_audit_log, get_conn, return_conn, connection_pool, init_connection_pool
+
+app = FastAPI()
+
+@app.on_event("startup")
+async def startup_event():
+    """Initialize database connection pool on startup"""
+    print("🚀 Initializing database connection pool...")
+    try:
+        init_connection_pool()
+        print("✅ Database connection pool initialized successfully")
+    except Exception as e:
+        print(f"❌ Failed to initialize database connection pool: {e}")
+        raise
 
 def _extract_diversity_key(summary, service):
     """Extract diversity key based on incident patterns."""
@@ -45,7 +58,6 @@ def _filter_diverse_results(incidents, max_per_key=1):
     
     return filtered_results
 
-app = FastAPI()
 verifier = SignatureVerifier(SLACK_SIGNING_SECRET)
 
 @app.post("/slack/actions")
@@ -275,6 +287,30 @@ async def get_similar_incidents(service: str = None, labels: str = None, limit: 
         print(f"Error fetching similar incidents: {e}")
         raise HTTPException(status_code=500, detail="Internal server error")
 
+@app.get("/health")
+async def health_check():
+    """Health check endpoint that also tests database connectivity"""
+    try:
+        if connection_pool is None:
+            return {"status": "error", "message": "Database connection pool not initialized"}
+            
+        with connection_pool.connection() as conn:
+            with conn.cursor() as cursor:
+                cursor.execute("SELECT 1")
+                result = cursor.fetchone()
+                
+        return {
+            "status": "healthy", 
+            "database": "connected",
+            "message": "API and database are operational"
+        }
+    except Exception as e:
+        return {
+            "status": "error", 
+            "database": "disconnected",
+            "message": f"Database connection failed: {str(e)}"
+        }
+
 @app.post("/semantic-search")
 async def semantic_search(request: Request):
     """
@@ -326,7 +362,12 @@ async def semantic_search(request: Request):
         query_embedding = embedding_result['data'][0]['embedding']
         
         # Search similar incidents using pgvector based on summary similarity
-        with get_conn() as conn:
+        from .db import connection_pool
+        
+        if connection_pool is None:
+            raise HTTPException(status_code=500, detail="Database connection pool not initialized")
+            
+        with connection_pool.connection() as conn:
             with conn.cursor() as cursor:
                 # Get more results initially to enable diversity filtering
                 initial_limit = limit * 3  # Get three times as many results for diversity
@@ -390,5 +431,168 @@ async def semantic_search(request: Request):
     except json.JSONDecodeError:
         raise HTTPException(status_code=400, detail="Invalid JSON")
     except Exception as e:
-        print(f"Error in semantic search: {e}")
+        print(f"❌ Error in semantic search: {e}")
+        print(f"🔍 Query: {body.get('query', 'No query') if 'body' in locals() else 'Failed to parse request'}")
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
+
+
+@app.post("/slack/actions")
+async def slack_actions(request: Request, x_slack_signature: str = Header(None), x_slack_request_timestamp: str = Header(None)):
+    """
+    Handle Slack button interactions from incident notifications
+    Processes: Acknowledge, Request More Info, Mark as Resolved
+    """
+    try:
+        # Get request body
+        body = await request.body()
+        body_str = body.decode('utf-8')
+        
+        # Verify Slack signature for security
+        if SLACK_SIGNING_SECRET and x_slack_signature and x_slack_request_timestamp:
+            verifier = SignatureVerifier(SLACK_SIGNING_SECRET)
+            if not verifier.is_valid(body=body_str, timestamp=x_slack_request_timestamp, signature=x_slack_signature):
+                raise HTTPException(status_code=401, detail="Invalid Slack signature")
+        
+        # Parse form data from Slack
+        import urllib.parse
+        parsed_data = urllib.parse.parse_qs(body_str)
+        payload_str = parsed_data.get('payload', [''])[0]
+        
+        if not payload_str:
+            raise HTTPException(status_code=400, detail="No payload found")
+        
+        payload = json.loads(payload_str)
+        
+        # Extract action information
+        action = payload.get('actions', [{}])[0]
+        action_id = action.get('action_id')
+        incident_id_str = action.get('value')
+        user_id = payload.get('user', {}).get('id')
+        user_name = payload.get('user', {}).get('name', 'Unknown')
+        channel_id = payload.get('channel', {}).get('id')
+        message_ts = payload.get('message', {}).get('ts')
+        
+        # Convert incident_id to integer
+        try:
+            incident_id = int(incident_id_str) if incident_id_str != 'N/A' else None
+        except (ValueError, TypeError):
+            incident_id = None
+            
+        if not incident_id:
+            raise HTTPException(status_code=400, detail=f"Invalid incident ID: {incident_id_str}")
+        
+        print(f"🎯 Slack action received: {action_id} for incident {incident_id} by user {user_name}")
+        
+        # Process different actions
+        response_text = ""
+        
+        if action_id == "ack":
+            # Acknowledge incident
+            update_incident_status(incident_id, "ack")
+            insert_audit_log(incident_id, user_name, "acknowledged", f"Acknowledged by {user_name}")
+            response_text = f"✅ Incident {incident_id} acknowledged by {user_name}"
+            
+        elif action_id == "info":
+            # Request more information - keep as 'open' since we need more info
+            update_incident_status(incident_id, "open")
+            insert_audit_log(incident_id, user_name, "info_requested", f"More info requested by {user_name}")
+            response_text = f"ℹ️ More information requested for incident {incident_id} by {user_name}"
+            
+        elif action_id == "resolve":
+            # Mark as resolved
+            update_incident_status(incident_id, "resolved")
+            insert_audit_log(incident_id, user_name, "resolved", f"Resolved by {user_name}")
+            response_text = f"🎉 Incident {incident_id} marked as resolved by {user_name}"
+            
+        else:
+            response_text = f"❓ Unknown action: {action_id}"
+        
+        # Return response to update Slack message
+        return {
+            "response_type": "in_channel",
+            "replace_original": False,
+            "text": response_text,
+            "blocks": [
+                {
+                    "type": "section",
+                    "text": {
+                        "type": "mrkdwn",
+                        "text": response_text
+                    }
+                }
+            ]
+        }
+        
+    except json.JSONDecodeError as e:
+        print(f"JSON decode error: {e}")
+        raise HTTPException(status_code=400, detail="Invalid JSON payload")
+    except Exception as e:
+        print(f"Error in slack actions: {e}")
         raise HTTPException(status_code=500, detail="Internal server error")
+
+
+@app.post("/test/notifications")
+async def test_notifications_endpoint(request: Request):
+    """
+    Test endpoint for the notification routing system
+    """
+    try:
+        body = await request.json()
+        incident_type = body.get("incident_type", "xss")
+        
+        # Import the test function
+        from .incident_router import test_notifications
+        
+        # Run the test
+        results = test_notifications(incident_type)
+        
+        return {
+            "status": "test_completed",
+            "incident_type": incident_type,
+            "results": results
+        }
+        
+    except json.JSONDecodeError:
+        raise HTTPException(status_code=400, detail="Invalid JSON")
+    except Exception as e:
+        print(f"Error in test notifications: {e}")
+        raise HTTPException(status_code=500, detail=f"Test failed: {str(e)}")
+
+
+@app.get("/routing/info")
+async def get_routing_info():
+    """
+    Get routing configuration information
+    """
+    try:
+        from .incident_router import get_routing_info
+        
+        return {
+            "status": "success",
+            "routing_info": get_routing_info()
+        }
+        
+    except Exception as e:
+        print(f"Error getting routing info: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to get routing info: {str(e)}")
+
+
+@app.get("/routing/info/{incident_type}")
+async def get_specific_routing_info(incident_type: str):
+    """
+    Get routing information for a specific incident type
+    """
+    try:
+        from .incident_router import get_routing_info
+        
+        return {
+            "status": "success",
+            "incident_type": incident_type,
+            "routing_info": get_routing_info(incident_type)
+        }
+        
+    except Exception as e:
+        print(f"Error getting routing info for {incident_type}: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to get routing info: {str(e)}")
